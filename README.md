@@ -53,6 +53,34 @@ Articulate 是一個 macOS 選單列的語音輸入 app，功能比照 Typeless 
 - **麥克風**
 - **輔助使用**：全域熱鍵、貼上文字、讀取畫面上下文都需要。
 
+## 安裝與更新（不需要 Xcode）
+
+repo 是私人的，所以透過那台 Mac 上已登入的 GitHub CLI 下載。第一次先準備好 `gh`：
+
+```bash
+brew install gh
+```
+
+```bash
+gh auth login
+```
+
+之後不論是第一次安裝還是更新到最新版，都執行同一行。它會下載最新的 Release、關掉正在執行的 Articulate（或舊名 Murmur）、把舊版移到垃圾桶、換上新版並打開：
+
+```bash
+gh api -H "Accept: application/vnd.github.raw" repos/anderson930420/Articulate/contents/install.sh | bash
+```
+
+第一次打開時，設定精靈會帶你給麥克風和輔助使用權限、選 Codex 或 Claude、決定要不要裝加強辨識。之後的更新用同一個簽章，權限會保留。從舊名 Murmur 換過來時，資料和設定會自動搬過去，權限要重新給一次。
+
+### 發布新版（在開發用的 Mac）
+
+```bash
+./release.sh 0.3.0
+```
+
+會設定版本號、打包並簽章、壓縮成 `dist/Articulate-0.3.0.zip`、在目前的 commit 打上 `v0.3.0`、推上 GitHub，並建立 Release。要先 commit 所有修改，也要有 `./setup-signing.sh` 建立的簽章（每一版用同一個簽章，使用者更新後才不用重給權限）。
+
 ## 編譯
 
 ```bash
