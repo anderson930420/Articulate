@@ -121,8 +121,9 @@ enum PreviewRenderer {
 
         // The update window.
         for (name, state) in [("available", Updater.State.available(.init(tag: "v0.3.0", version: "0.3.0",
-                                  notes: "## What's Changed\n* Add Claude (subscription) as a polishing engine\n* Check for updates from the menu\n\n**Full Changelog**: v0.2.0...v0.3.0"))),
-                              ("up-to-date", .upToDate), ("failed", .failed("GitHub CLI 還沒登入：在終端機執行 gh auth login。"))] {
+                                  notes: "## What's Changed\n* Add Claude (subscription) as a polishing engine\n* Check for updates from the menu\n\n**Full Changelog**: v0.2.0...v0.3.0", zipURL: nil))),
+                              ("up-to-date", .upToDate), ("failed", .failed("GitHub CLI 還沒登入：在終端機執行 gh auth login。")),
+                              ("different-signer", .differentSigner(.init(tag: "v0.3.0", version: "0.3.0", notes: "", zipURL: nil), URL(fileURLWithPath: "/tmp")))] {
             let updater = Updater()
             updater.state = state
             save(UpdateView(updater: updater), "update-\(name)", directory)

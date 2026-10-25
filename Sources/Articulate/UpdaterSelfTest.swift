@@ -24,11 +24,22 @@ enum UpdaterSelfTest {
         let installed = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Articulate.app")
         let newApp: URL
         do {
-            newApp = try await updater.download(release, replacing: installed)
-            check("下載、解壓縮、驗證簽章，而且和已安裝的版本同一個簽章", true, newApp.path)
+            let result = try await updater.download(release, replacing: installed)
+            newApp = result.app
+            check("下載（\(release.zipURL == nil ? "透過 GitHub CLI" : "公開下載，不需要 gh")）、解壓縮、驗證簽章，和已安裝的版本同一張憑證",
+                  result.keepsPermissions, newApp.path)
         } catch {
             check("下載、解壓縮、驗證簽章，而且和已安裝的版本同一個簽章", false, error.localizedDescription)
             return false
+        }
+
+        // A copy signed with a different certificate is noticed (an ad-hoc signed copy stands in for one built elsewhere).
+        let other = FileManager.default.temporaryDirectory.appendingPathComponent("articulate-other-\(UUID().uuidString).app")
+        defer { try? FileManager.default.removeItem(at: other) }
+        if (try? FileManager.default.copyItem(at: newApp, to: other)) != nil,
+           (try? await Shell.run(URL(fileURLWithPath: "/usr/bin/codesign"), ["--force", "--sign", "-", other.path]))?.status == 0 {
+            let keeps = await Updater.keepsPermissions(other, replacing: installed)
+            check("不同憑證簽的版本會被發現（不會靜靜換掉而讓權限被重設）", !keeps, keeps ? "誤判成相同" : "判定為不同憑證，會先問使用者")
         }
 
         // The swap, in a sandbox: an old copy, a process standing in for the running app, a fake Trash.

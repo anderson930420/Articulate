@@ -55,23 +55,23 @@ Articulate 是一個 macOS 選單列的語音輸入 app，功能比照 Typeless 
 
 ## 安裝與更新（不需要 Xcode）
 
-repo 是私人的，所以透過那台 Mac 上已登入的 GitHub CLI 下載。第一次先準備好 `gh`：
+第一次安裝，或手動更新到最新版，都執行同一行。它會下載最新的 Release、驗證簽章、關掉正在執行的 Articulate（或舊名 Murmur）、把舊版移到垃圾桶、換上新版並打開。
+
+repo 是公開的時候，不需要任何工具：
 
 ```bash
-brew install gh
+curl -fsSL https://raw.githubusercontent.com/anderson930420/Articulate/main/install.sh | bash
 ```
 
-```bash
-gh auth login
-```
-
-之後不論是第一次安裝還是更新到最新版，都執行同一行。它會下載最新的 Release、關掉正在執行的 Articulate（或舊名 Murmur）、把舊版移到垃圾桶、換上新版並打開：
+repo 是私人的時候，要用 GitHub CLI 登入（到 https://cli.github.com 下載安裝檔，不需要 Homebrew；裝好後執行 `gh auth login`）：
 
 ```bash
 gh api -H "Accept: application/vnd.github.raw" repos/anderson930420/Articulate/contents/install.sh | bash
 ```
 
-第一次打開時，設定精靈會帶你給麥克風和輔助使用權限、選 Codex 或 Claude、決定要不要裝加強辨識。之後的更新用同一個簽章，權限會保留。從舊名 Murmur 換過來時，資料和設定會自動搬過去，權限要重新給一次。
+裝好之後，從選單列的「檢查更新…」更新（每天也會自動檢查一次）。公開的 Release 直接下載；私人 repo 透過 GitHub CLI。
+
+**權限：** macOS 只在新版和舊版用同一張憑證簽章時保留權限（比對的是憑證本身，不只是名稱）。從自己打包的版本換成 Release 版，或從舊名 Murmur 換過來時，Articulate 會先說明，再讓你決定；更新後在設定精靈裡重新允許麥克風和輔助使用一次，之後的更新就會保留。
 
 ### 發布新版（在開發用的 Mac）
 
