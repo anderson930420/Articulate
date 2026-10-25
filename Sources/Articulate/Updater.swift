@@ -94,8 +94,20 @@ final class Updater: ObservableObject {
     }
 
     func install() async {
-        guard let release = available, let gh = Self.gh else { return }
+        guard let release = available else { return }
         state = .downloading(release)
+        do {
+            let newApp = try await download(release, replacing: Bundle.main.bundleURL)
+            state = .installing(release)
+            try swap(in: newApp, version: release.version)
+        } catch {
+            state = .failed((error as? Failure)?.message ?? error.localizedDescription)
+        }
+    }
+
+    /// Downloads and unpacks a release and checks it may replace `current`: a valid signature by the same signer.
+    func download(_ release: Release, replacing current: URL) async throws -> URL {
+        guard let gh = Self.gh else { throw Failure("需要 GitHub CLI") }
         do {
             let temp = FileManager.default.temporaryDirectory.appendingPathComponent("articulate-update-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
@@ -107,14 +119,11 @@ final class Updater: ObservableObject {
             let newApp = unpacked.appendingPathComponent("Articulate.app")
             try await run(URL(fileURLWithPath: "/usr/bin/codesign"), ["--verify", "--deep", "--strict", newApp.path], "新版的簽章驗證失敗")
             // Same signer as this copy: macOS ties the permissions (Accessibility, Microphone) to it.
-            let mine = await Self.signers(of: Bundle.main.bundleURL), theirs = await Self.signers(of: newApp)
+            let mine = await Self.signers(of: current), theirs = await Self.signers(of: newApp)
             guard !theirs.isEmpty, theirs == mine else {
                 throw Failure("新版的簽章（\(theirs.first ?? "無")）和目前這版（\(mine.first ?? "無")）不同，為了保留權限沒有安裝")
             }
-            state = .installing(release)
-            try swap(in: newApp, version: release.version)
-        } catch {
-            state = .failed((error as? Failure)?.message ?? error.localizedDescription)
+            return newApp
         }
     }
 
@@ -131,6 +140,17 @@ final class Updater: ObservableObject {
         }
     }
 
+    /// Waits for process `waitFor` to exit, moves `current` to `trash` and `new` into its place, and opens it.
+    static func swapScript(current: URL, new: URL, trash: URL, waitFor pid: Int32, open: Bool) -> String {
+        func quoted(_ url: URL) -> String { "'" + url.path.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        return """
+            while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done
+            mv \(quoted(current)) \(quoted(trash)) && mv \(quoted(new)) \(quoted(current)) || exit 1
+            xattr -dr com.apple.quarantine \(quoted(current)) 2>/dev/null
+            \(open ? "open \(quoted(current)) || { sleep 2; open \(quoted(current)); }" : "true")
+            """
+    }
+
     /// The signing authorities `codesign` reports, outermost first.
     private static func signers(of app: URL) async -> [String] {
         let output = try? await Shell.run(URL(fileURLWithPath: "/usr/bin/codesign"), ["-dvv", app.path])
@@ -140,17 +160,11 @@ final class Updater: ObservableObject {
 
     /// Hands over to a script that waits for this copy to quit, puts the new one in its place, and opens it.
     private func swap(in newApp: URL, version: String) throws {
-        let current = Bundle.main.bundleURL
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
         let trash = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".Trash/Articulate-\(Self.currentVersion)-\(stamp).app")
-        func quoted(_ url: URL) -> String { "'" + url.path.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-        let script = """
-            while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.2; done
-            mv \(quoted(current)) \(quoted(trash)) && mv \(quoted(newApp)) \(quoted(current))
-            xattr -dr com.apple.quarantine \(quoted(current)) 2>/dev/null
-            open \(quoted(current)) || { sleep 2; open \(quoted(current)); }
-            """
+        let script = Self.swapScript(current: Bundle.main.bundleURL, new: newApp, trash: trash,
+                                     waitFor: ProcessInfo.processInfo.processIdentifier, open: true)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = ["-c", script]

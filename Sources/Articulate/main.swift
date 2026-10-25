@@ -10,6 +10,7 @@ import AVFoundation
 //   Articulate --selftest-codex-cancel              a Codex request given up on ends at once
 //   Articulate --selftest-codex-memory              Codex lets go of threads after use
 //   Articulate --selftest-setup                     first-run setup: Codex, uv, checksum, downloader
+//   Articulate --selftest-updater                   update: latest release, download, signature, swap
 //   Articulate --selftest-learner                   replay edits after inserting and check what the dictionary learns
 //   Articulate --learn-from-transcripts [--apply]   learn terms the user fixed before sending, from Claude Code transcripts
 //   Articulate --render-previews <dir>              render UI screenshots
@@ -166,6 +167,10 @@ if arguments.count >= 2, arguments[1] == "--learn-from-transcripts" {
 
 if arguments.count >= 2, arguments[1] == "--selftest-learner" {
     runAsync { await MainActor.run { () -> Task<Bool, Never> in Task { await LearnerSelfTest.run() } }.value ? 0 : 1 }
+}
+
+if arguments.count >= 2, arguments[1] == "--selftest-updater" {
+    runAsync { await MainActor.run { () -> Task<Bool, Never> in Task { await UpdaterSelfTest.run() } }.value ? 0 : 1 }
 }
 
 if arguments.count >= 2, arguments[1] == "--selftest-setup" {
