@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var hubWindow: NSWindow?
     private var setupWindow: NSWindow?
+    private var updateWindow: NSWindow?
     /// Lives with the app, so a model download keeps going when the setup window is closed.
     private lazy var setupModel = SetupModel(installer: TEAInstaller())
     private var appearanceObservation: NSKeyValueObservation?
@@ -77,6 +78,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
+        NotificationCenter.default.addObserver(forName: .articulateCheckUpdates, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.openUpdates() }
+        }
+        Updater.shared.startAutomaticChecks()
         NotificationCenter.default.addObserver(forName: .articulateOpenSetup, object: nil, queue: .main) { [weak self] note in
             let step = note.object as? SetupModel.Step
             MainActor.assumeIsolated { self?.openSetup(step) }
@@ -147,6 +152,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
+        if let release = Updater.shared.available {
+            menu.addItem(action("🆕 有新版本 \(release.version)，更新…", #selector(openUpdatesFromMenu)))
+            menu.addItem(.separator())
+        }
         let key = Prefs.triggerKey.shortLabel
         menu.addItem(disabled("按一下 \(key) 口述 · \(key)＋空白鍵 隨便問 · \(key)＋右Shift 翻譯"))
         menu.addItem(disabled(AIEngine.statusDescription))
@@ -187,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(action("設定精靈…", #selector(openSetupFromMenu)))
+        menu.addItem(action("檢查更新…", #selector(openUpdatesFromMenu)))
         menu.addItem(action("設定…", #selector(openSettings), key: ","))
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
         menu.addItem(disabled("版本 \(version)"))
@@ -238,6 +248,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openSetupFromMenu() { openSetup(nil) }
+    @objc private func openUpdatesFromMenu() { openUpdates() }
+
+    /// The update window; checks again unless an update is already found or being installed.
+    func openUpdates() {
+        if updateWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 340),
+                                  styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+            window.title = "Articulate 更新"
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: UpdateView(updater: Updater.shared) { [weak self] in
+                self?.updateWindow?.close()
+            })
+            window.center()
+            updateWindow = window
+        }
+        switch Updater.shared.state {
+        case .available, .downloading, .installing: break
+        default: Task { await Updater.shared.check() }
+        }
+        NSApp.activate()
+        updateWindow?.makeKeyAndOrderFront(nil)
+    }
 
     /// The setup window, optionally at a given step (e.g. from the speech-model setting).
     func openSetup(_ step: SetupModel.Step?) {

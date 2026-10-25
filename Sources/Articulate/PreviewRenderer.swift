@@ -119,6 +119,15 @@ enum PreviewRenderer {
             m.installer.received = 1_560_000_000; m.installer.expected = 4_100_000_000; m.installer.bytesPerSecond = 38_000_000
         }
 
+        // The update window.
+        for (name, state) in [("available", Updater.State.available(.init(tag: "v0.3.0", version: "0.3.0",
+                                  notes: "## What's Changed\n* Add Claude (subscription) as a polishing engine\n* Check for updates from the menu\n\n**Full Changelog**: v0.2.0...v0.3.0"))),
+                              ("up-to-date", .upToDate), ("failed", .failed("GitHub CLI 還沒登入：在終端機執行 gh auth login。"))] {
+            let updater = Updater()
+            updater.state = state
+            save(UpdateView(updater: updater), "update-\(name)", directory)
+        }
+
         // The whole window (sidebar and page), at the smallest and the default size, in light and dark mode.
         for (width, height, suffix) in [(900.0, 620.0, "small"), (1200.0, 840.0, "large")] {
             for dark in [false, true] {

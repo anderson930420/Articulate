@@ -12,6 +12,8 @@
     <string>Articulate</string>
     <key>CFBundleDisplayName</key>
     <string>Articulate</string>
+    <key>ArticulateReleases</key>
+    <string>anderson930420/Articulate</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>

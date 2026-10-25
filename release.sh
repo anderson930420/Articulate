@@ -37,9 +37,17 @@ rm -f "$ZIP"
 # ditto keeps the bundle's signature and extended attributes intact (zip -r can break the signature).
 ditto -c -k --sequesterRsrc --keepParent build/Articulate.app "$ZIP"
 
+# What's new: the commits since the previous release (shown in the app's update window).
+PREVIOUS="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+NOTES="dist/notes-$VERSION.md"
+{
+    echo "## 這一版的更新"
+    git log --no-merges --pretty='- %s' ${PREVIOUS:+"$PREVIOUS..HEAD"} | grep -v '^- Release [0-9]'
+} > "$NOTES"
+
 git add "$PLIST"
 git commit -q -m "Release $VERSION"
 git tag "v$VERSION"
 git push -q origin HEAD "v$VERSION"
-gh release create "v$VERSION" "$ZIP" --title "Articulate $VERSION" --generate-notes
+gh release create "v$VERSION" "$ZIP" --title "Articulate $VERSION" --notes-file "$NOTES"
 echo "Released v$VERSION. On any Mac, install or update with the command in README › 安裝與更新."

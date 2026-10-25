@@ -6,6 +6,7 @@ extension Notification.Name {
     static let articulateLogoChanged = Notification.Name("articulateLogoChanged")
     /// Opens the setup window; the object, if any, is the `SetupModel.Step` to show.
     static let articulateOpenSetup = Notification.Name("articulateOpenSetup")
+    static let articulateCheckUpdates = Notification.Name("articulateCheckUpdates")
 }
 
 struct SettingsView: View {
@@ -82,6 +83,10 @@ struct SettingsView: View {
             SettingRow("外觀") {
                 menu($appearance) { ForEach(AppAppearance.allCases) { Text($0.label).tag($0.rawValue) } }
                     .onChange(of: appearance) { _, _ in NotificationCenter.default.post(name: .articulateAppearanceChanged, object: nil) }
+            }
+            SettingRow("版本", detail: "Articulate \(Updater.currentVersion)") {
+                Button("檢查更新") { NotificationCenter.default.post(name: .articulateCheckUpdates, object: nil) }
+                    .buttonStyle(SecondaryButtonStyle())
             }
             SettingRow("設定精靈", detail: "檢查麥克風、輔助使用、AI 潤稿和加強辨識") {
                 Button("打開") { NotificationCenter.default.post(name: .articulateOpenSetup, object: nil) }
