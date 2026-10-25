@@ -15,13 +15,14 @@ enum Shell {
         let text: String
     }
 
-    static func run(_ executable: URL, _ arguments: [String], environment: [String: String] = [:],
+    /// `environment` is added to Articulate's own; `replacing` is used as the whole environment instead.
+    static func run(_ executable: URL, _ arguments: [String], environment: [String: String] = [:], replacing: [String: String]? = nil,
                     started: (@Sendable (Process) -> Void)? = nil) async throws -> Output {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = executable
             process.arguments = arguments
-            process.environment = ProcessInfo.processInfo.environment.merging(environment) { $1 }
+            process.environment = replacing ?? ProcessInfo.processInfo.environment.merging(environment) { $1 }
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = pipe
@@ -115,6 +116,14 @@ final class SetupModel: ObservableObject {
         }
     }
 
+    enum ClaudeState: Equatable {
+        case checking
+        case missing
+        case signedOut(CodexCLI.Found)
+        case signingIn(CodexCLI.Found)
+        case ready(CodexCLI.Found, plan: String?)
+    }
+
     enum CodexState: Equatable {
         case checking
         case missing
@@ -127,10 +136,13 @@ final class SetupModel: ObservableObject {
     @Published var microphone = AVCaptureDevice.authorizationStatus(for: .audio)
     @Published var accessibility = AXIsProcessTrusted()
     @Published var codex: CodexState = .checking
+    @Published var claude: ClaudeState = .checking
+    @Published var engine: PolishEngine = Prefs.polishEngine
     let installer: TEAInstaller
 
     private var timer: Timer?
     private var login: Process?
+    private var claudeLogin: Process?
     private var installerWatch: NSObjectProtocol?
 
     init(installer: TEAInstaller) {
@@ -144,7 +156,7 @@ final class SetupModel: ObservableObject {
         switch step {
         case .microphone: microphone != .authorized
         case .accessibility: !accessibility
-        case .ai: if case .ready = codex { false } else { AIEngine.current() == nil }
+        case .ai: !isComplete(.ai) && AIEngine.current() == nil
         default: false
         }
     }
@@ -154,7 +166,7 @@ final class SetupModel: ObservableObject {
         case .welcome: true
         case .microphone: microphone == .authorized
         case .accessibility: accessibility
-        case .ai: if case .ready = codex { true } else { false }
+        case .ai: chosenEngine == .claudeCode ? claudeReady : codexReady
         case .recognition: installer.state == .installed
         case .done: permissionsGranted
         }
@@ -168,6 +180,68 @@ final class SetupModel: ObservableObject {
             MainActor.assumeIsolated { self?.refreshPermissions() }
         }
         Task { await checkCodex() }
+        Task { await checkClaude() }
+    }
+
+    var codexReady: Bool { if case .ready = codex { true } else { false } }
+    var claudeReady: Bool { if case .ready = claude { true } else { false } }
+
+    /// The AI the setup shows as chosen: an explicit choice, or what "auto" would use now.
+    var chosenEngine: PolishEngine {
+        switch engine {
+        case .codex, .claudeCode: engine
+        default: !codexReady && claudeReady ? .claudeCode : .codex
+        }
+    }
+
+    func choose(_ engine: PolishEngine) {
+        UserDefaults.standard.set(engine.rawValue, forKey: "polishEngine")
+        self.engine = engine
+        AIEngine.prewarm()
+    }
+
+    func checkClaude() async {
+        if case .signingIn = claude {} else { claude = .checking }
+        guard let url = await ClaudeCodeCLI.find() else {
+            claude = .missing
+            return
+        }
+        let found = CodexCLI.Found(url: url, version: await ClaudeCodeCLI.version(url))
+        let status = await ClaudeCodeCLI.status(url)
+        if status.isSubscription {
+            claude = .ready(found, plan: status.plan)
+            claudeLogin?.terminate()
+            claudeLogin = nil
+        } else if case .signingIn = claude {
+            // Still waiting for the browser.
+        } else {
+            claude = .signedOut(found)
+        }
+    }
+
+    /// `claude auth login` opens the browser for the Claude sign-in; Articulate only waits for it to finish.
+    func signInClaude() {
+        guard case .signedOut(let found) = claude else { return }
+        claude = .signingIn(found)
+        Task {
+            _ = try? await Shell.run(found.url, ["auth", "login"], replacing: ClaudeCodeCLI.environment) { process in
+                Task { @MainActor in self.claudeLogin = process }
+            }
+        }
+        Task {
+            for _ in 0..<150 {
+                try? await Task.sleep(for: .seconds(2))
+                guard case .signingIn = claude else { return }
+                await checkClaude()
+            }
+            if case .signingIn(let found) = claude { claude = .signedOut(found) }
+        }
+    }
+
+    func cancelClaudeSignIn() {
+        claudeLogin?.terminate()
+        claudeLogin = nil
+        if case .signingIn(let found) = claude { claude = .signedOut(found) }
     }
 
     func stop() {

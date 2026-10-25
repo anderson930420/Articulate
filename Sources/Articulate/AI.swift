@@ -282,11 +282,13 @@ enum AIEngine {
         case .off: return nil
         case .apple: return AppleModel.isAvailable ? AppleModel() : nil
         case .claude: return claude
+        case .claudeCode: return ClaudeCodeCLI.isAvailable ? ClaudeCodeModel() : nil
         case .codex: return CodexModel.isAvailable ? CodexServerModel() : nil
         case .auto:
             for engine in PolishEngine.autoOrder {
                 switch engine {
                 case .codex where CodexModel.isAvailable: return CodexServerModel()
+                case .claudeCode where ClaudeCodeCLI.isAvailable: return ClaudeCodeModel()
                 case .claude where claude != nil: return claude
                 case .apple where AppleModel.isAvailable: return AppleModel()
                 default: continue
@@ -298,8 +300,11 @@ enum AIEngine {
 
     /// Warms up the engine before it is needed (Codex: start the app-server and prime threads).
     static func prewarm() {
-        guard current() is CodexServerModel else { return }
-        Task { await CodexThreadPool.shared.refill() }
+        switch current() {
+        case is CodexServerModel: Task { await CodexThreadPool.shared.refill() }
+        case is ClaudeCodeModel: Task { await ClaudeCodePool.shared.prewarm() }
+        default: break
+        }
     }
 
     static var statusDescription: String {
@@ -526,13 +531,14 @@ enum AITasks {
 extension PolishEngine {
     /// "Auto" uses the first of these that can be used. Codex comes first: Articulate's speed and quality
     /// work was measured with it.
-    static let autoOrder: [PolishEngine] = [.codex, .claude, .apple]
+    static let autoOrder: [PolishEngine] = [.codex, .claudeCode, .claude, .apple]
 
     /// Usable right now: signed in, an API key saved, or Apple Intelligence turned on.
     var isAvailable: Bool {
         switch self {
         case .auto, .off: true
         case .codex: CodexModel.isAvailable
+        case .claudeCode: ClaudeCodeCLI.isAvailable
         case .claude: Keychain.apiKey() != nil
         case .apple: AppleModel.isAvailable
         }
@@ -544,6 +550,7 @@ extension PolishEngine {
         let names = Self.autoOrder.filter(\.isAvailable).map { engine in
             switch engine {
             case .codex: "Codex"
+            case .claudeCode: "Claude 訂閱"
             case .claude: "Claude API"
             default: "Apple Intelligence"
             }

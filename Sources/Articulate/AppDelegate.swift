@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Prefs.migrateLegacySettings()
+        ClaudeCodeCLI.refreshStatus()
         // Only one Articulate at a time: a second copy (another build, `open -n`) shows the running one's window and quits.
         // The end-to-end test deliberately runs a second instance.
         let me = ProcessInfo.processInfo.processIdentifier
@@ -104,6 +105,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         CodexAppServer.shared.stop()
         CompanionServer.shared.stop()
+        let pool = ClaudeCodePool.shared
+        Task { await pool.stop() }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

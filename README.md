@@ -1,6 +1,6 @@
 # Articulate
 
-Articulate 是一個 macOS 選單列的語音輸入 app，功能比照 Typeless 2.8.1 重新實作。語音辨識在這台 Mac 上執行，用的是 macOS 26 的 `SpeechAnalyzer` / `DictationTranscriber`。AI 引擎可以選 Apple Intelligence（本機）、Claude API，或 Codex（用你的 ChatGPT 登入）。
+Articulate 是一個 macOS 選單列的語音輸入 app，功能比照 Typeless 2.8.1 重新實作。語音辨識在這台 Mac 上執行，用的是 macOS 26 的 `SpeechAnalyzer` / `DictationTranscriber`。AI 引擎可以選 Codex（用你的 ChatGPT 登入）、Claude（用你的 Claude 訂閱，透過你電腦上的 Claude Code）、Claude API（金鑰），或 Apple Intelligence（本機）。
 
 ## 快捷鍵
 
@@ -248,6 +248,12 @@ open -n ~/Applications/Articulate.app --args --e2e <音檔資料夾> <報告路�
 - 不知道哪個是哪個模型的盲評：兩個模型輸出不同的 27 段裡，Sol 較好 10 段、Luna 較好 3 段、14 段相同。Sol 修對的是同音和英文錯字，例如「比照」（Luna：比較）、「Claude」（Luna：Cloud）、「Dots」（Luna：Dutch），以及前後一致的數字。
 
 短句兩個模型差不多準，Sol 卻多 0.3–0.7 秒，所以「自動」只把 100 字以上、以及邊說邊潤稿的後半段交給 Sol。兩種模型各有預先暖好的對話，最慢一次請求 5.5 秒，沒有放棄等待。隨便問、學字典仍用 Luna。
+
+### 用 Claude 訂閱潤稿（設定 › AI › AI 引擎 › Claude）
+
+Articulate 執行你自己安裝、自己登入的 Claude Code（`claude -p`），不讀取它的登入資料：`claude auth status` 確認是用 Claude 訂閱（`claude.ai`）登入，並移除 `ANTHROPIC_*` 這類環境變數，避免改走 API 金鑰計費。每個請求用一個新的 Claude Code 程式（不帶前一次口述的內容），開始錄音時就先啟動一個待命，閒置 3 分鐘後關掉（待命時約 114 MB、CPU 0%）。
+
+實測（同樣的潤稿指令）：Sonnet 短句約 2.2 秒（第一個字約 1.2 秒），Codex 約 1.2 秒；Haiku 經由訂閱要 23–45 秒，所以不提供。回答本身結束就收下，不等 Claude Code 之後約 2 秒才送出的最終結果。Claude 訂閱的 5 小時和每週用量是和 Claude Code 共用的。
 
 ### 實際 App 裡的速度（端對端測試，2026-10-17 最終版本）
 

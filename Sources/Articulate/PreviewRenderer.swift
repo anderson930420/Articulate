@@ -90,13 +90,17 @@ enum PreviewRenderer {
             save(SetupView(model: model).environment(\.colorScheme, dark ? .dark : .light), "setup-\(name)\(dark ? "-dark" : "")", directory, dark: dark)
         }
         let codex = CodexCLI.Found(url: URL(fileURLWithPath: "/opt/homebrew/bin/codex"), version: "0.163.0")
-        let granted = { (m: SetupModel) in m.microphone = .authorized; m.accessibility = true; m.codex = .ready(codex) }
+        let claudeCode = CodexCLI.Found(url: URL(fileURLWithPath: "/opt/homebrew/bin/claude"), version: "2.1.281")
+        let granted = { (m: SetupModel) in
+            m.microphone = .authorized; m.accessibility = true; m.codex = .ready(codex); m.claude = .ready(claudeCode, plan: "max"); m.engine = .codex
+        }
         setup("1-welcome") { $0.step = .welcome; $0.microphone = .notDetermined; $0.accessibility = false; $0.codex = .checking; $0.installer.state = .notInstalled }
         setup("2-microphone") { $0.step = .microphone; $0.microphone = .notDetermined; $0.accessibility = false }
         setup("3-accessibility") { $0.step = .accessibility; $0.microphone = .authorized; $0.accessibility = false }
         setup("4-ai-found") { granted($0); $0.step = .ai }
-        setup("4-ai-signed-out") { granted($0); $0.step = .ai; $0.codex = .signedOut(codex) }
-        setup("4-ai-missing") { granted($0); $0.step = .ai; $0.codex = .missing }
+        setup("4-ai-claude-chosen") { granted($0); $0.step = .ai; $0.engine = .claudeCode }
+        setup("4-ai-signed-out") { granted($0); $0.step = .ai; $0.codex = .signedOut(codex); $0.claude = .signedOut(claudeCode) }
+        setup("4-ai-missing") { granted($0); $0.step = .ai; $0.codex = .missing; $0.claude = .missing; $0.engine = .claudeCode }
         setup("5-tea-ask") { granted($0); $0.step = .recognition; $0.installer.state = .notInstalled }
         setup("5-tea-downloading") { m in
             granted(m); m.step = .recognition

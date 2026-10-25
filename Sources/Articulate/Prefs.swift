@@ -61,7 +61,7 @@ enum TriggerKey: String, CaseIterable, Identifiable {
 }
 
 enum PolishEngine: String, CaseIterable, Identifiable {
-    case auto, apple, claude, codex, off
+    case auto, apple, claude, claudeCode, codex, off
 
     var id: String { rawValue }
 
@@ -69,7 +69,8 @@ enum PolishEngine: String, CaseIterable, Identifiable {
         switch self {
         case .auto: "自動"
         case .apple: "Apple Intelligence（本機）"
-        case .claude: "Claude API"
+        case .claude: "Claude API（金鑰）"
+        case .claudeCode: "Claude（用你的 Claude 訂閱）"
         case .codex: "Codex（用你的 ChatGPT 登入）"
         case .off: "關閉（直接輸出辨識結果）"
         }

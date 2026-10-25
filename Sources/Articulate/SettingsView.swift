@@ -32,6 +32,8 @@ struct SettingsView: View {
     @AppStorage("autoLearnDictionary") private var autoLearnDictionary = true
     @AppStorage("microphoneUID") private var microphoneUID = ""
 
+    @AppStorage("claudeCodeModel") private var claudeCodeModel = "sonnet"
+    @State private var claudeStatus = "檢查中…"
     @State private var apiKeyInput = ""
     @State private var hasAPIKey = Keychain.apiKey() != nil
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -211,10 +213,14 @@ struct SettingsView: View {
                 menu($codexModel) { ForEach(CodexModel.models, id: \.id) { Text($0.label).tag($0.id) } }
             }
             SettingRow("Codex 快速模式", detail: "優先處理，約快 1.5–2 倍") { switchToggle($codexFast) }
+            SettingRow("Claude 訂閱", detail: claudeStatus) {
+                menu($claudeCodeModel) { ForEach(ClaudeCodeCLI.models, id: \.id) { Text($0.label).tag($0.id) } }
+            }
+            .task { await refreshClaudeStatus() }
             SettingRow("Apple Intelligence") {
                 Text(AppleModel.statusDescription).font(.system(size: 14)).foregroundStyle(Theme.secondaryInk)
             }
-            SettingRow("Claude 模型") {
+            SettingRow("Claude API 模型", detail: "只有選「Claude API（金鑰）」時使用") {
                 TextField("", text: $claudeModel).textFieldStyle(.roundedBorder).frame(width: 220)
             }
             SettingRow("Claude API Key", detail: hasAPIKey ? "已儲存在鑰匙圈；輸入新的可以取代" : nil) {
@@ -285,6 +291,18 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .help(style == .handwritten ? "手寫的 V，右上角一顆小愛心" : "原本的聲波 logo")
+    }
+
+    /// Claude Code's sign-in, as `claude auth status` reports it (the login itself is never read).
+    private func refreshClaudeStatus() async {
+        guard let claude = await ClaudeCodeCLI.find() else {
+            claudeStatus = "沒有找到 Claude Code（可以在設定精靈裡看安裝方式）"
+            return
+        }
+        let status = await ClaudeCodeCLI.status(claude)
+        claudeStatus = status.isSubscription
+            ? "已用 Claude \(status.plan.map { $0.capitalized } ?? "訂閱")登入，用你的 Claude Code 處理"
+            : "還沒用 Claude 訂閱登入（終端機執行 claude auth login，或用設定精靈）"
     }
 
     private func switchToggle(_ isOn: Binding<Bool>) -> some View {

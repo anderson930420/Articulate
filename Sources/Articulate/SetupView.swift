@@ -176,45 +176,100 @@ struct SetupView: View {
     }
 
     private var ai: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            header("AI 潤稿", "刪除贅字、套用改口、排成條列。Articulate 用你自己的 Codex（ChatGPT 帳號）處理，不需要 API 金鑰。")
-                .padding(.bottom, -8)
-            statusCard {
-                switch model.codex {
-                case .checking:
-                    ProgressView().controlSize(.small)
-                    Text("正在找 Codex…").font(Theme.body()).foregroundStyle(Theme.secondaryInk)
-                case .ready(let found):
-                    status(.ok, "已找到 Codex \(found.version)，已用 ChatGPT 登入", detail: "不需要另外下載。\(found.url.path)")
-                case .signedOut(let found):
-                    status(.todo, "已找到 Codex \(found.version)，但還沒登入", detail: "登入會開啟瀏覽器，用你的 ChatGPT 帳號。")
-                    Spacer()
-                    Button("登入 ChatGPT") { model.signInCodex() }.buttonStyle(PrimaryButtonStyle())
-                case .signingIn:
-                    ProgressView().controlSize(.small)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("請在瀏覽器完成登入…").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.ink)
-                        Text("完成後這裡會自動更新。").font(Theme.caption()).foregroundStyle(Theme.secondaryInk)
-                    }
-                    Spacer()
-                    Button("取消") { model.cancelSignIn() }.buttonStyle(SecondaryButtonStyle())
-                case .missing:
-                    status(.warning, "這台 Mac 沒有找到 Codex", detail: "安裝後回到這裡按「重新檢查」。")
-                    Spacer()
-                    Button("重新檢查") { Task { await model.checkCodex() } }.buttonStyle(SecondaryButtonStyle())
-                }
+        VStack(alignment: .leading, spacing: 12) {
+            header("AI 潤稿", "刪除贅字、套用改口、排成條列。選一個用你自己帳號的 AI 來處理，不需要 API 金鑰。")
+                .padding(.bottom, -12)
+            engineOption(.codex, title: "Codex", subtitle: "用你的 ChatGPT 帳號・短句約 1.2 秒")
+            engineOption(.claudeCode, title: "Claude", subtitle: "用你的 Claude 訂閱（Pro／Max）・短句約 2 秒")
+            if model.chosenEngine == .codex && model.codex == .missing {
+                install("安裝 Codex（擇一，在終端機執行）", ["brew install codex", "npm install -g @openai/codex"], then: "裝好後執行 codex login 登入 ChatGPT，再按「重新檢查」。")
             }
-            if model.codex == .missing {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("安裝方式（擇一，在終端機執行）").font(Theme.cardTitle()).foregroundStyle(Theme.ink)
-                    command("brew install codex")
-                    command("npm install -g @openai/codex")
-                    Text("裝好後執行 codex login 登入 ChatGPT。先不裝也可以：\(AppleModel.isAvailable ? "會改用 Apple Intelligence 潤稿。" : "會直接輸出辨識結果，不潤稿。")")
-                        .font(Theme.caption()).foregroundStyle(Theme.secondaryInk)
-                }
-                .card()
+            if model.chosenEngine == .claudeCode && model.claude == .missing {
+                install("安裝 Claude Code（擇一，在終端機執行）", ["curl -fsSL https://claude.ai/install.sh | bash", "brew install --cask claude-code"],
+                        then: "裝好後執行 claude auth login 登入你的 Claude 帳號，再按「重新檢查」。")
             }
         }
+    }
+
+    /// One AI choice: a radio button, what it uses, and its install or sign-in state with the next action.
+    private func engineOption(_ engine: PolishEngine, title: String, subtitle: String) -> some View {
+        let selected = model.chosenEngine == engine
+        return HStack(alignment: .center, spacing: 14) {
+            Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                .font(.system(size: 18))
+                .foregroundStyle(selected ? Theme.accent : Theme.tertiaryInk)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(title).font(Theme.cardTitle()).foregroundStyle(Theme.ink)
+                    Text(subtitle).font(Theme.caption()).foregroundStyle(Theme.secondaryInk)
+                }
+                engineStatus(engine)
+            }
+            Spacer(minLength: 8)
+            engineAction(engine)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
+            .strokeBorder(selected ? Theme.accent : Theme.border, lineWidth: selected ? 1.5 : 1))
+        .contentShape(Rectangle())
+        .onTapGesture { model.choose(engine) }
+    }
+
+    @ViewBuilder private func engineStatus(_ engine: PolishEngine) -> some View {
+        let line: (String, Color) = switch engine {
+        case .claudeCode:
+            switch model.claude {
+            case .checking: ("正在檢查…", Theme.secondaryInk)
+            case .missing: ("這台 Mac 沒有找到 Claude Code", .orange)
+            case .signedOut(let f): ("已找到 Claude Code \(f.version)，還沒用 Claude 訂閱登入", .orange)
+            case .signingIn: ("請在瀏覽器完成登入…", Theme.secondaryInk)
+            case .ready(let f, let plan): ("已找到 Claude Code \(f.version)，已用 Claude \(plan.map { $0.capitalized } ?? "訂閱")登入", .green)
+            }
+        default:
+            switch model.codex {
+            case .checking: ("正在檢查…", Theme.secondaryInk)
+            case .missing: ("這台 Mac 沒有找到 Codex", .orange)
+            case .signedOut(let f): ("已找到 Codex \(f.version)，還沒登入 ChatGPT", .orange)
+            case .signingIn: ("請在瀏覽器完成登入…", Theme.secondaryInk)
+            case .ready(let f): ("已找到 Codex \(f.version)，已用 ChatGPT 登入", .green)
+            }
+        }
+        HStack(spacing: 6) {
+            Circle().fill(line.1).frame(width: 7, height: 7)
+            Text(line.0).font(Theme.caption()).foregroundStyle(Theme.secondaryInk)
+        }
+    }
+
+    @ViewBuilder private func engineAction(_ engine: PolishEngine) -> some View {
+        switch engine {
+        case .claudeCode:
+            switch model.claude {
+            case .checking: ProgressView().controlSize(.small)
+            case .missing: Button("重新檢查") { Task { await model.checkClaude() } }.buttonStyle(SecondaryButtonStyle())
+            case .signedOut: Button("登入 Claude") { model.choose(.claudeCode); model.signInClaude() }.buttonStyle(PrimaryButtonStyle())
+            case .signingIn: Button("取消") { model.cancelClaudeSignIn() }.buttonStyle(SecondaryButtonStyle())
+            case .ready: EmptyView()
+            }
+        default:
+            switch model.codex {
+            case .checking: ProgressView().controlSize(.small)
+            case .missing: Button("重新檢查") { Task { await model.checkCodex() } }.buttonStyle(SecondaryButtonStyle())
+            case .signedOut: Button("登入 ChatGPT") { model.choose(.codex); model.signInCodex() }.buttonStyle(PrimaryButtonStyle())
+            case .signingIn: Button("取消") { model.cancelSignIn() }.buttonStyle(SecondaryButtonStyle())
+            case .ready: EmptyView()
+            }
+        }
+    }
+
+    private func install(_ title: String, _ commands: [String], then: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(Theme.cardTitle()).foregroundStyle(Theme.ink)
+            ForEach(commands, id: \.self) { command($0) }
+            Text(then).font(Theme.caption()).foregroundStyle(Theme.secondaryInk)
+        }
+        .card()
     }
 
     private func command(_ text: String) -> some View {
