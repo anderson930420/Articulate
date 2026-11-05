@@ -112,6 +112,7 @@ final class DictationController {
         transcriber.onPartial = { [weak self] text in
             guard let self, self.state == .recording else { return }
             self.bar.model.preview = text
+            if text.count >= Prefs.strongModelFromLength { self.companion?.stopEarlyPasses() }
         }
         do {
             if let simulatedAudio {
@@ -127,7 +128,7 @@ final class DictationController {
         // Fusion: a second recognizer hears the same audio and transcribes it piece by piece while the user talks.
         var companion: CompanionRecognizer?
         if Prefs.recognizer == .fusion, CompanionServer.isInstalled {
-            let second = CompanionRecognizer()
+            let second = CompanionRecognizer(shortDictation: session.mode == .dictation)
             second.setContext(terms: DictionaryStore.shared.terms)
             transcriber.audioSink = { second.append($0) }
             companion = second
@@ -151,7 +152,7 @@ final class DictationController {
         companion?.setContext(terms: Array(DictionaryStore.shared.terms.prefix(30)) + screenTerms.prefix(30))
         // Polish while the user talks. With fusion each piece waits for TEA's version of it, so both transcripts
         // still reach the AI; after release only the last stretch is left.
-        let polisher = AIEngine.current().map { SpeculativePolisher(engine: $0, ctx: promptContext(for: session), usesSecond: companion != nil) }
+        let polisher = AIEngine.current().map { SpeculativePolisher(engine: $0, ctx: promptContext(for: session), usesSecond: companion != nil, shortDictation: session.mode == .dictation) }
         speculative = polisher
         companion?.onProgress { [weak polisher] text in polisher?.update(second: text) }
         transcriber.onFinalized = { [weak self] finalized in
@@ -171,6 +172,7 @@ final class DictationController {
         session.mode = mode
         bar.model.mode = mode
         if mode == .translation {
+            companion?.stopEarlyPasses()
             session.translationIndex = 0
             bar.model.translationTarget = Prefs.translationTargets.first ?? "en-US"
         }
@@ -194,6 +196,7 @@ final class DictationController {
         }
         guard state == .recording, let transcriber else { return }
         self.transcriber = nil
+        companion?.stopEarlyPasses()
         companion = nil
         speculative?.cancel()
         speculative = nil
@@ -235,6 +238,9 @@ final class DictationController {
         let speculative = session.mode == .dictation ? self.speculative : nil
         self.speculative = nil
         let companion = session.mode == .dictation ? self.companion : nil
+        if session.mode != .dictation {
+            self.companion?.stopEarlyPasses()
+        }
         self.companion = nil
 
         processingTask = Task {
@@ -255,12 +261,14 @@ final class DictationController {
         // TEA finishes its last piece while Apple finalizes; it never holds the result up for more than 3 s.
         // Still loading (the first dictation after it sat idle): wait at most 0.5 s, then go on with Apple's text,
         // instead of making a short dictation wait ~1.5 s for the model to load.
-        async let secondTranscript = companion?.finish(timeout: CompanionServer.shared.isReady ? 3 : 0.5)
+        let apple = Task { try await transcriber.finish() }
+        defer { apple.cancel(); speculative?.cancel(); companion?.stopEarlyPasses() }
+        async let secondTranscript = companion?.finish(timeout: CompanionServer.shared.isReady ? 3 : 0.5, finalTranscript: apple)
         var second: String?
         do {
-            entry.raw = try await transcriber.finish()
+            entry.raw = try await apple.value
             second = await secondTranscript
-            if companion != nil { DiagnosticLog.write("companion: \(second.map { "\($0.count) chars" } ?? "unavailable, Apple only")") }
+            if companion != nil { DiagnosticLog.write("companion: \(second.map { "\($0.count) chars" + (companion?.usedEarly == true ? " (early tail)" : "") } ?? "unavailable, Apple only")") }
             // Apple heard nothing but TEA did (e.g. a very quiet start): use TEA's text.
             if entry.raw.isEmpty, let second, !second.isEmpty { entry.raw = second }
         } catch {
@@ -339,7 +347,7 @@ final class DictationController {
                 let text = if let speculative {
                     try await speculative.finish(transcript: raw, alternatives: alternatives, second: secondTranscript)
                 } else {
-                    try await AITasks.polish(raw, ctx: ctx, with: engine)
+                    try await AITasks.polish(raw, ctx: ctx, with: engine, shortDictation: true)
                 }
                 if let speculative {
                     DiagnosticLog.write("polish: \(speculative.lastPath), \(speculative.speculativeRequests) requests while speaking")

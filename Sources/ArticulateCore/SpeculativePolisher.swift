@@ -53,15 +53,25 @@ final class SpeculativePolisher: SpeculativePolishing {
     private(set) var lastPath = ""
     /// No piece is being polished (benchmarks wait for this between sentences).
     var isIdle: Bool { inFlight == nil }
+    /// Short dictations send their whole-text polish twice at once (see `AITasks.polish`).
+    private let shortDictation: Bool
+    private final class Winner: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: String?
+        func set(_ value: String) { lock.withLock { self.value = value } }
+        var text: String? { lock.withLock { value } }
+    }
+    private(set) var lastTwinWinner: String?
     /// Fusion: the second recognizer's text so far, and how much of it the polished pieces cover.
     private let usesSecond: Bool
     private var second: [Character] = []
     private var secondCovered = 0
 
-    init(engine: LanguageModel, ctx: PromptContext, usesSecond: Bool = false) {
+    init(engine: LanguageModel, ctx: PromptContext, usesSecond: Bool = false, shortDictation: Bool = false) {
         self.engine = engine
         self.ctx = ctx
         self.usesSecond = usesSecond
+        self.shortDictation = shortDictation && Prefs.shortDictationSpeed
     }
 
     /// Fusion: called whenever the second recognizer has finished another piece.
@@ -151,7 +161,12 @@ final class SpeculativePolisher: SpeculativePolishing {
         fullContext.alternatives = alternatives
         func polishWhole(_ reason: String) async throws -> String {
             lastPath = "whole (\(reason))"
-            return try await AITasks.polish(transcript, ctx: fullContext, with: engine)
+            let winner = Winner()
+            let result = try await AITasks.polish(transcript, ctx: fullContext, with: engine,
+                                                  shortDictation: shortDictation && reason == "short",
+                                                  onWinner: { winner.set($0) })
+            lastTwinWinner = winner.text
+            return result
         }
 
         // A piece still being polished is kept if the final transcript still starts with it.

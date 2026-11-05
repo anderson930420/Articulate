@@ -6,8 +6,16 @@ import FoundationModels
 protocol LanguageModel {
     var name: String { get }
     func text(system: String, user: String) async throws -> String
+    /// Only whole short dictations may ask Codex for simultaneous copies.
+    func shortDictationText(system: String, user: String, onWinner: (@Sendable (String) -> Void)?) async throws -> String
     /// Returns an object matching `schema` (a JSON Schema object).
     func json(system: String, user: String, schema: [String: Any]) async throws -> [String: Any]
+}
+
+extension LanguageModel {
+    func shortDictationText(system: String, user: String, onWinner: (@Sendable (String) -> Void)?) async throws -> String {
+        try await text(system: system, user: user)
+    }
 }
 
 enum AIError: LocalizedError {
@@ -406,9 +414,15 @@ enum AITasks {
         """
     }
 
-    static func polish(_ transcript: String, ctx: PromptContext, with engine: LanguageModel) async throws -> String {
+    static func polish(_ transcript: String, ctx: PromptContext, with engine: LanguageModel,
+                       shortDictation: Bool = false, onWinner: (@Sendable (String) -> Void)? = nil) async throws -> String {
         let user = [ctx.blocks, "<transcript>\n\(transcript)\n</transcript>"].filter { !$0.isEmpty }.joined(separator: "\n")
-        let output = try await engine.text(system: polishInstructions(ctx), user: user)
+        let output: String
+        if shortDictation, Prefs.shortDictationSpeed, (4..<Prefs.strongModelFromLength).contains(transcript.count) {
+            output = try await engine.shortDictationText(system: polishInstructions(ctx), user: user, onWinner: onWinner)
+        } else {
+            output = try await engine.text(system: polishInstructions(ctx), user: user)
+        }
         return try sanitize(output, original: transcript, maxGrowth: 2.0)
     }
 
