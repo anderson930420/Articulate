@@ -1,5 +1,6 @@
 import ApplicationServices
 import Foundation
+@testable import ArticulateCore
 
 /// `Articulate --selftest-learner`: replays what the user does to a field after Articulate inserts text (fix a word,
 /// press Enter so the field empties) and checks what the edit learner picks up. No real field is touched;

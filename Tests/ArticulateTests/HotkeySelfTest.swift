@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+@testable import ArticulateCore
 
 /// Scripted key sequences checked against HotkeyLogic (`Articulate --selftest-hotkeys`).
 enum HotkeySelfTest {

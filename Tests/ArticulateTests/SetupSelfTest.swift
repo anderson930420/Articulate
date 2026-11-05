@@ -1,4 +1,5 @@
 import Foundation
+@testable import ArticulateCore
 
 /// `Articulate --selftest-setup`: the parts of first-run setup that can be checked without a 4 GB download —
 /// finding the user's Codex and its sign-in, finding uv, the streaming SHA-256 (against the original weights
