@@ -1,4 +1,5 @@
 import Foundation
+@testable import ArticulateCore
 
 /// `Articulate --selftest-updater`: the update path without touching the running app — find the latest release,
 /// download and verify it against the installed copy's signature, then run the swap script in a temporary folder.

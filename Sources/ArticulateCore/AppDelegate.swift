@@ -14,8 +14,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Lives with the app, so a model download keeps going when the setup window is closed.
     private lazy var setupModel = SetupModel(installer: TEAInstaller())
     private var appearanceObservation: NSKeyValueObservation?
+    #if ARTICULATE_LAB
     /// Set when launched with --e2e: run the end-to-end test instead of waiting for the user.
     var endToEndArguments: (audioDir: URL, report: URL)?
+    #endif
 
     static let reopenNotification = Notification.Name("local.articulate.dictation.reopen")
 
@@ -25,7 +27,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Only one Articulate at a time: a second copy (another build, `open -n`) shows the running one's window and quits.
         // The end-to-end test deliberately runs a second instance.
         let me = ProcessInfo.processInfo.processIdentifier
-        if endToEndArguments == nil,
+        #if ARTICULATE_LAB
+        let endToEnd = endToEndArguments != nil
+        #else
+        let endToEnd = false
+        #endif
+        if !endToEnd,
            NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
                .contains(where: { $0.processIdentifier != me }) {
             DistributedNotificationCenter.default().postNotificationName(Self.reopenNotification, object: nil, deliverImmediately: true)
@@ -73,10 +80,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !phrases.isEmpty { DiagnosticLog.write("dictionary: removed \(phrases.count) learned phrase(s) that are not names or terms") }
         hotkeys.start()
 
+        #if ARTICULATE_LAB
         if let e2e = endToEndArguments {
             Task { await EndToEndTest.run(app: self, audioDir: e2e.audioDir, report: e2e.report) }
             return
         }
+        #endif
 
         NotificationCenter.default.addObserver(forName: .articulateCheckUpdates, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.openUpdates() }

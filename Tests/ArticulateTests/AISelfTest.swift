@@ -1,4 +1,5 @@
 import Foundation
+@testable import ArticulateCore
 
 /// Checks each AI task against the configured engine (`Articulate --ai-test`).
 enum AISelfTest {

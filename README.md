@@ -34,7 +34,7 @@ Articulate 是一個 macOS 選單列的語音輸入 app，功能比照 Typeless 
 - **個人字典**：
   - 可以手動新增、編輯、刪除、搜尋，也可以匯入 CSV
   - 插入文字後你手動改過的名稱，會自動學起來：插入後每秒看一次那個輸入框（最多 2 分鐘），按 Enter 送出前也會先看一次，所以「改完馬上送出」也學得到；學到時浮動列會顯示「已加入字典」，可以按「移除」；AI 偶爾會把改寫過的一小句（例如「要畫幾種圖」）當成詞，所以中文詞要 8 個字以內、不含「的、了、要、幾⋯」這類文法字才收
-  - 測試：`.build/release/Articulate --selftest-learner`（模擬改字後送出，不會動到真的輸入框，也不會留下測試用的詞）
+  - 測試：`ARTICULATE_LIVE_TESTS=1 swift test --filter learner`（模擬改字後送出，不會動到真的輸入框，也不會留下測試用的詞）
 - **個性化**：參考你在同一個 app 過去的寫法，調整語氣和用字。
 - **歷史紀錄**：
   - 分頁：全部／口述／隨便問／翻譯
@@ -92,18 +92,12 @@ gh api -H "Accept: application/vnd.github.raw" repos/anderson930420/Articulate/c
 
 ## 測試
 
+測試在 `Tests/`：
+
 ```bash
-swift build
-.build/debug/Articulate --selftest-hotkeys                  # 快捷鍵狀態機（13 個情境）
-.build/debug/Articulate --transcribe-file audio.wav zh-TW   # 本機辨識一個音檔
-.build/debug/Articulate --ai-test                           # 用目前的 AI 引擎測試潤稿、翻譯、隨便問、學單字
-.build/debug/Articulate --render-previews /tmp/previews     # 輸出介面預覽圖
-
-# 端對端測試：用 TextEdit 和預先錄好的語音，跑過所有功能（需要輔助使用權限）
-open -n ~/Applications/Articulate.app --args --e2e <音檔資料夾> <報告路徑>
+swift test                          # 不需要網路、權限或你的資料的測試（快捷鍵狀態機）
+ARTICULATE_LIVE_TESTS=1 swift test  # 再加上要用網路、這台 Mac 的 AI 引擎，或會暫時寫入真的字典的測試
 ```
-
-端對端測試結束後，會自動清掉測試產生的紀錄、字典、統計，並還原剪貼簿。
 
 ## 延遲與品質研究（對照 Typeless）
 
@@ -304,7 +298,7 @@ Articulate 執行你自己安裝、自己登入的 Claude Code（`claude -p`）�
 | 問題 | 實測 | 狀態 |
 |---|---|---|
 | Codex 為每個對話啟動 MCP 外掛（REA、node_repl），越積越多 | Articulate 底下 72 個程式、7.9 GB → 0 個、82 MB | 已修 |
-| Codex app-server 每次請求多佔約 2.3 MB | 用完的對話從不卸載：20 個請求後載入的對話 6 → 26 個；連續用 3 天長到 552 MB | 已修：用完就 `thread/unsubscribe`，Articulate 自己的 Codex 設 `thread_unload_delay_secs=5`（預設 30 分鐘；不改 ~/.codex/config.toml）。80 個請求後維持 6 個對話、82 MB，速度不變（`--selftest-codex-memory`）。上限降為閒置 200 MB／硬上限 512 MB，只當保險 |
+| Codex app-server 每次請求多佔約 2.3 MB | 用完的對話從不卸載：20 個請求後載入的對話 6 → 26 個；連續用 3 天長到 552 MB | 已修：用完就 `thread/unsubscribe`，Articulate 自己的 Codex 設 `thread_unload_delay_secs=5`（預設 30 分鐘；不改 ~/.codex/config.toml）。80 個請求後維持 6 個對話、82 MB，速度不變（測試：`ARTICULATE_LIVE_TESTS=1 swift test --filter codexMemory`）。上限降為閒置 200 MB／硬上限 512 MB，只當保險 |
 | TEA（MLX）GPU 快取沒有上限 | — | 已修：上限 256 MB，每次辨識完清掉 |
 | 放棄等待時間把指令也算進長度 | 短句上限約 28–34 秒 | 已修：6 秒 + 每 100 字 1 秒 |
 | 1.6 秒就重送第二個對話 | 40% 請求被送兩次，重送只贏 4/24 | 已修：2.5 秒，重送降到 9% |
@@ -323,7 +317,7 @@ Articulate 執行你自己安裝、自己登入的 Claude Code（`claude -p`）�
 | 更低的推理強度 | Luna 最低就是 low | 無法再降 |
 | Luna 在長段口述的同音字、英文錯字較多 | 100 字以上內容錯誤 48（Sol 27） | 已修：100 字以上改用 Sol，內容錯誤 62 → 38，每個字數區間仍比 Typeless 快 |
 | 閒置後輕按說話鍵，錄音馬上結束（「沒有聽到任何東西」） | 按鍵時間用「程式處理到的時間」量：啟動麥克風卡住主執行緒時，0.2 秒的輕按被量成 0.4–0.8 秒，當成按住說話 | 已修：改用按鍵事件本身的時間；輕按／按住的界線 0.35 → 0.5 秒 |
-| 放棄等待或備援請求先回來後，還在等另一個卡住的請求 | Codex 卡住時放棄後又等 12–26 秒才貼上（10/15–10/22 共 6 次，最久 33 秒）；觸發備援的請求也要等輸掉的那個跑完 | 已修：被取消的請求立刻結束，並請 Codex 停掉那一輪（`--selftest-codex-cancel`）|
+| 放棄等待或備援請求先回來後，還在等另一個卡住的請求 | Codex 卡住時放棄後又等 12–26 秒才貼上（10/15–10/22 共 6 次，最久 33 秒）；觸發備援的請求也要等輸掉的那個跑完 | 已修：被取消的請求立刻結束，並請 Codex 停掉那一輪（測試：`ARTICULATE_LIVE_TESTS=1 swift test --filter codexCancel`）|
 | Codex 第一個字約 1.4 秒 | 服務本身的反應時間 | 本機無法修；以預先暖好的對話和重送處理卡住的情況 |
 | 英文專有名詞兩套本機辨識都聽錯 | 辨識模型本身的極限；字典有正確拼法時可以修正（專案名稱被聽成三個不相干的英文字，加進字典後就對了） | 已補救：即時學習、補學過去的修改、加入你專案資料夾的名稱 |
 
@@ -334,20 +328,3 @@ Articulate 執行你自己安裝、自己登入的 Claude Code（`claude -p`）�
 ## 簽章
 
 執行一次 `./setup-signing.sh`，會在登入鑰匙圈建立「Articulate Local Signing」憑證，之後 `build.sh` 會自動用它簽章，重新編譯後「輔助使用」和「麥克風」權限都會保留。沒有這個憑證時，會改用 ad-hoc 簽章，每次編譯都要重新授權。
-
-### 重跑測試
-
-```bash
-swift build -c release
-.build/release/Articulate --bench-typeless 36 report.txt     # 同一段錄音比速度（加 ARTICULATE_JUDGE=1 會一起評品質）
-.build/release/Articulate --bench-quality 36 label          # 只比品質
-.build/release/Articulate --measure-release audio.wav       # 放開後辨識收尾要多久
-# 照真實速度比較：ARTICULATE_FULL_REALTIME=1；ARTICULATE_POLISHERS=prefix,incremental,fusion 選擇要比的潤稿方式
-# 辨識和潤稿分開跑：--asr-dump 存下辨識結果，--polish-dump <檔案> apple|other|fuse-apple <報告> 只跑潤稿和評分
-# 換評審重評：ARTICULATE_JUDGE_MODEL=gpt-6-luna .build/release/Articulate --rejudge <報告.json> <新報告>
-# Whisper 系列（需要 brew install whisper-cpp）；whole＝放開後整段辨識，chunked＝邊說邊分段辨識
-ARTICULATE_WHISPER_PORT=8805 .build/release/Articulate --bench-whisper <ggml模型> <名稱> whole|chunked report.txt
-# 潤稿會歪多少：每句潤稿 5 次，檢查條列格式／該留和該刪的字、評審打可讀性與內容錯誤、算每次之間的差異
-.build/release/Articulate --polish-eval Tools/polish_format_cases.json 5 format-report.json       # 排版
-.build/release/Articulate --polish-eval Tools/polish_correction_cases.json 5 correction-report.json  # 改口
-```

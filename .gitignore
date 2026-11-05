@@ -4,3 +4,6 @@ build/
 UI 預覽/
 .DS_Store
 dist/
+# Developer tools, experiments and reports that stay on the development Mac
+Lab/
+Sources/ArticulateCore/Lab/

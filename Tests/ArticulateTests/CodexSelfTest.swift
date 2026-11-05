@@ -1,4 +1,5 @@
 import Foundation
+@testable import ArticulateCore
 
 /// `Articulate --selftest-codex-cancel`: a request whose caller stops waiting (a hedge that lost, or one given up on)
 /// must end at once instead of keeping the dictation waiting until Codex finishes writing.
