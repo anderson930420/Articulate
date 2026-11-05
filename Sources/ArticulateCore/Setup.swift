@@ -320,8 +320,8 @@ final class SetupModel: ObservableObject {
 
 /// Installs the extra recognizer the way setup-tea.sh does, from inside the app, with progress:
 /// uv (the user's, or a pinned copy) → Python 3.12 and the pinned mlx-qwen3-asr package → the TEA-ASR-1.1
-/// weights from Hugging Face at a pinned revision, SHA-256 checked → an 8-bit copy → the 4.1 GB original
-/// removed. Nothing starts until the user asks for it.
+/// weights from Hugging Face at a pinned revision, SHA-256 checked → a 6-bit copy (audio encoder 8-bit) → the
+/// 4.1 GB original removed. Nothing starts until the user asks for it.
 @MainActor
 final class TEAInstaller: ObservableObject {
     enum Phase: Int, CaseIterable, Identifiable {
@@ -362,7 +362,7 @@ final class TEAInstaller: ObservableObject {
     static let package = "mlx-qwen3-asr==0.4.4"
     static let packagesBefore = "2026-09-30"
     static let uvVersion = "0.11.30"
-    /// The download, the 8-bit copy and the Python environment, with room to spare.
+    /// The download, the 6-bit copy and the Python environment, with room to spare.
     static let neededSpace: Int64 = 8_000_000_000
     static let downloadSize: Int64 = 4_100_000_000
 
@@ -476,7 +476,7 @@ final class TEAInstaller: ObservableObject {
     private func preparePython(uv: URL) async throws {
         let asr = CompanionServer.directory
         try FileManager.default.createDirectory(at: asr, withIntermediateDirectories: true)
-        for script in ["asr_server", "prepare_asr_model"] {
+        for script in ["asr_server", "prepare_asr_model", "tea_model", "tea_common"] {
             guard let bundled = Bundle.main.url(forResource: script, withExtension: "py", subdirectory: "ASR") else {
                 throw InstallError(message: "App 裡少了 \(script).py，請重新下載 Articulate")
             }
@@ -512,7 +512,7 @@ final class TEAInstaller: ObservableObject {
 
     private func convert() async throws {
         let script = CompanionServer.directory.appendingPathComponent("prepare_asr_model.py")
-        try await step(CompanionServer.python, ["-I", script.path, Self.source.path, CompanionServer.model.path, "8"], "轉換模型失敗")
+        try await step(CompanionServer.python, ["-I", script.path, Self.source.path, CompanionServer.preferredModel.path, "6"], "轉換模型失敗")
     }
 
     /// Runs one installer command; the last lines of its output explain a failure.

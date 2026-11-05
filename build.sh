@@ -13,7 +13,7 @@ cp "$BIN" "$APP/Contents/MacOS/Articulate"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 # The setup window installs the extra recognizer from these (same files setup-tea.sh uses).
 mkdir -p "$APP/Contents/Resources/ASR"
-cp Tools/asr_server.py Tools/prepare_asr_model.py "$APP/Contents/Resources/ASR/"
+cp Tools/asr_server.py Tools/prepare_asr_model.py Tools/tea_model.py Tools/tea_common.py "$APP/Contents/Resources/ASR/"
 
 rm -rf build/AppIcon.iconset
 "$BIN" --render-icon build/AppIcon.iconset
@@ -38,7 +38,7 @@ if [ "${1:-}" = "--install" ]; then
     for _ in $(seq 1 50); do pgrep -x Articulate >/dev/null || break; sleep 0.1; done
     # Keep the installed speech-model server in step with Tools/ (it is copied there by setup-tea.sh).
     ASR="$HOME/Library/Application Support/Articulate/ASR"
-    if [ -d "$ASR" ]; then cp Tools/asr_server.py "$ASR/asr_server.py"; fi
+    if [ -d "$ASR" ]; then cp Tools/asr_server.py Tools/prepare_asr_model.py Tools/tea_model.py Tools/tea_common.py "$ASR/"; fi
     mkdir -p "$HOME/Applications"
     rm -rf "$HOME/Applications/Articulate.app"
     cp -R "$APP" "$HOME/Applications/Articulate.app"

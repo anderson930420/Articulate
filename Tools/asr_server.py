@@ -6,28 +6,28 @@ POST /inference  -> multipart form: file (16 kHz mono 16-bit WAV), prompt (optio
 Usage: python -I asr_server.py <model_dir> <port>
 Articulate starts it on demand and stops it when idle; it also exits on its own when Articulate goes away.
 """
+from __future__ import annotations
+
+import argparse
 import email
 import io
 import json
 import os
-import re
 import sys
 import threading
 import time
 import wave
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
-import mlx.core as mx
-import numpy as np
-from mlx_qwen3_asr import load_model, transcribe
+# Articulate uses python -I, which omits the script directory from sys.path.
+# Add only this script's trusted sibling directory, never the working directory.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tea_common import PRIVATE_USE
+from tea_model import load_tea_model
 
-MODEL_DIR, PORT = sys.argv[1], int(sys.argv[2])
 # TEA marks rewritten tokens with private-use characters; its tokenizer.json decoder strips them.
-PRIVATE_USE = re.compile("[-]+")
 PARENT = os.getppid()
-# MLX keeps freed GPU buffers for reuse with no upper bound by default, so memory would only grow with use.
-# Cap that cache and empty it after every request: the model itself is about 2 GB, the rest stays small.
-mx.set_cache_limit(256 * 1024 * 1024)
 
 
 def exit_with_parent():
@@ -85,13 +85,44 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-threading.Thread(target=exit_with_parent, daemon=True).start()
-started = time.time()
-MODEL = load_model(MODEL_DIR)[0]
-# The first transcription compiles GPU kernels (about a second); do it before reporting ready.
-transcribe(np.zeros(16000 * 3, dtype=np.float32), model=MODEL, language="Chinese")
-mx.clear_cache()
-print(f"loaded and warmed up {MODEL_DIR} in {time.time() - started:.1f}s, "
-      f"{mx.get_active_memory() / 2**30:.2f} GB in use", flush=True)
-# One request at a time: MLX inference is not meant to run concurrently on one model.
-HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+def main():
+    global mx, np, transcribe, MODEL
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("model_dir")
+    parser.add_argument("port", type=int, nargs="?")
+    parser.add_argument("--allow-trim", action="store_true")
+    parser.add_argument("--measure-load", action="store_true", help="load, warm, print memory and exit; no HTTP socket")
+    parser.add_argument("--no-retie", action="store_true", help="measurement control only")
+    args = parser.parse_args()
+    if not args.measure_load and args.port is None:
+        parser.error("port is required unless --measure-load is used")
+    if args.no_retie and not args.measure_load:
+        parser.error("--no-retie is only for --measure-load")
+    import mlx.core as mx
+    import numpy as np
+    from mlx_qwen3_asr import transcribe
+
+    mx.set_cache_limit(256 * 1024 * 1024)
+    mx.reset_peak_memory()
+    started = time.perf_counter()
+    MODEL, _, tying = load_tea_model(args.model_dir, retie=not args.no_retie, allow_trim=args.allow_trim)
+    loaded_memory = mx.get_active_memory()
+    load_peak = mx.get_peak_memory()
+    # Compile GPU kernels before reporting ready, just as the original server did.
+    transcribe(np.zeros(16000 * 3, dtype=np.float32), model=MODEL, language="Chinese")
+    mx.synchronize()
+    mx.clear_cache()
+    print(f"loaded and warmed up {args.model_dir} in {time.perf_counter() - started:.1f}s, "
+          f"{mx.get_active_memory() / 2**30:.2f} GiB in use", flush=True)
+    print(json.dumps({"retie": tying, "after_load_active_bytes": loaded_memory,
+                      "load_peak_bytes": load_peak, "warmed_active_bytes": mx.get_active_memory(),
+                      "peak_bytes": mx.get_peak_memory()}), flush=True)
+    if args.measure_load:
+        return
+    threading.Thread(target=exit_with_parent, daemon=True).start()
+    # One request at a time: MLX inference is not meant to run concurrently.
+    HTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

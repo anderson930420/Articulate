@@ -296,8 +296,8 @@ struct SetupView: View {
             if installer.state == .notInstalled {
                 HStack(spacing: 12) {
                     fact("arrow.down.circle", "下載", "約 4.1 GB")
-                    fact("internaldrive", "安裝後佔用", "約 2.5 GB")
-                    fact("memorychip", "使用時記憶體", "約 2.5 GB")
+                    fact("internaldrive", "安裝後佔用", "約 1.8 GB")
+                    fact("memorychip", "使用時記憶體", "約 1.9 GB")
                 }
                 Text("說話時才載入模型，閒置 10 分鐘後自動釋放記憶體。模型來自 Hugging Face（JacobLinCool/TEA-ASR-1.1，MIT 授權），下載後會驗證檔案。")
                     .font(Theme.caption()).foregroundStyle(Theme.secondaryInk)

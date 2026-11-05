@@ -3,18 +3,40 @@ import Foundation
 
 /// The second recognizer of "Apple＋TEA 融合": TEA-ASR (a Taiwan-tuned Qwen3-ASR) on MLX, run by a small
 /// Python HTTP server that setup-tea.sh installs. It starts on the first dictation and stops after sitting
-/// idle, so its ~2.6 GB of memory is only taken while the user is dictating.
+/// idle, so its memory (about 1.9 GB with the 6-bit model, 2.2–2.6 GB with the older 8-bit copy) is only taken
+/// while the user is dictating.
 @MainActor
 final class CompanionServer {
     static let shared = CompanionServer()
-    static let port = 47615
+    /// Benchmarks can run their own server (another port and model) without touching the app's.
+    static let port = Int(ProcessInfo.processInfo.environment["ARTICULATE_TEA_PORT"] ?? "") ?? 47615
     /// Stop the server after this long without a dictation.
     static let idleTimeout: TimeInterval = 600
 
     static var directory: URL { AppPaths.support.appendingPathComponent("ASR", isDirectory: true) }
     static var python: URL { directory.appendingPathComponent("venv/bin/python") }
-    static var script: URL { directory.appendingPathComponent("asr_server.py") }
-    static var model: URL { AppPaths.support.appendingPathComponent("Models/tea-asr-1.1-8bit", isDirectory: true) }
+    /// Benchmarks can also run a server script from a checkout without touching the installed one.
+    static var script: URL {
+        if let path = ProcessInfo.processInfo.environment["ARTICULATE_TEA_SCRIPT"] { return URL(fileURLWithPath: path) }
+        return directory.appendingPathComponent("asr_server.py")
+    }
+    /// Text decoder 6-bit, audio encoder 8-bit: 1.75 GB loaded instead of 2.5 GB. On the user's 200 newest
+    /// recordings it matched the unquantized model as closely as the 8-bit copy did, which stays the fallback
+    /// for installs made before it (their original weights may be gone, so the 6-bit copy cannot be made).
+    nonisolated static let modelFolders = ["tea-asr-1.1-6bit", "tea-asr-1.1-8bit"]
+    static var models: URL { AppPaths.support.appendingPathComponent("Models", isDirectory: true) }
+    /// Where setup puts a new copy.
+    static var preferredModel: URL { models.appendingPathComponent(modelFolders[0], isDirectory: true) }
+    static var model: URL {
+        if let path = ProcessInfo.processInfo.environment["ARTICULATE_TEA_MODEL"] { return URL(fileURLWithPath: path, isDirectory: true) }
+        return installedModel(in: models) ?? preferredModel
+    }
+
+    /// The first complete model folder, in order of preference.
+    nonisolated static func installedModel(in models: URL, fileManager: FileManager = .default) -> URL? {
+        modelFolders.map { models.appendingPathComponent($0, isDirectory: true) }
+            .first { fileManager.fileExists(atPath: $0.appendingPathComponent("model.safetensors").path) }
+    }
 
     static var isInstalled: Bool {
         let fm = FileManager.default
@@ -89,7 +111,8 @@ final class CompanionServer {
         self.process = process
         for _ in 0..<300 {
             if await Self.ping() == .ours {
-                DiagnosticLog.write(String(format: "companion server ready in %.1fs", Date().timeIntervalSince(started)))
+                DiagnosticLog.write(String(format: "companion server (%@) ready in %.1fs", Self.model.lastPathComponent,
+                                           Date().timeIntervalSince(started)))
                 return true
             }
             guard process.isRunning else { break }
