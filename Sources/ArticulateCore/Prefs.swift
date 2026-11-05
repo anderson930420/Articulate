@@ -369,7 +369,7 @@ enum Recognizer: String, CaseIterable, Identifiable {
         switch self {
         case .dictation: "DictationTranscriber（聽寫模型）"
         case .speech: "SpeechTranscriber（長篇轉錄模型）"
-        case .fusion: "Apple＋TEA 融合（較準，錄音時多占約 2.6 GB 記憶體）"
+        case .fusion: "Apple＋TEA 融合（較準，錄音時多占約 1.9 GB 記憶體）"
         }
     }
 

@@ -11,7 +11,7 @@ enum ResourceGuard {
     /// hard limit, always. Normal use should never reach either.
     static let codexSoftLimit: UInt64 = 200 << 20
     static let codexLimit: UInt64 = 512 << 20
-    /// The speech model is about 2.5 GB including its weights on the GPU.
+    /// The speech model is about 1.9 GB including its weights on the GPU (2.2–2.6 GB with the older 8-bit copy).
     static let speechModelLimit: UInt64 = 4_608 << 20
     static let checkInterval: TimeInterval = 30
     /// Codex briefly runs the user's login shell to read its environment (under a second). Tool servers stay up,
