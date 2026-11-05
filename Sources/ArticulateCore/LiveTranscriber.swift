@@ -7,12 +7,14 @@ enum TranscriberError: LocalizedError {
     case unsupportedLocale(String)
     case noAudioFormat
     case microphoneUnavailable
+    case assetsNotInstalled
 
     var errorDescription: String? {
         switch self {
         case .unsupportedLocale(let id): "這台 Mac 不支援「\(id)」的本機語音辨識"
         case .noAudioFormat: "無法取得語音辨識需要的音訊格式"
         case .microphoneUnavailable: "找不到可用的麥克風"
+        case .assetsNotInstalled: "請先在 Articulate 安裝本機語音辨識模型"
         }
     }
 }
@@ -138,7 +140,7 @@ final class LiveTranscriber: @unchecked Sendable {
     nonisolated(unsafe) private static var preparedLocales = Set<String>()
 
     /// Downloads the on-device speech model for a locale if it is not installed yet.
-    static func prepareAssets(for locale: Locale, config: String? = nil) async throws {
+    static func prepareAssets(for locale: Locale, config: String? = nil, allowDownload: Bool = true) async throws {
         let speech = isSpeechConfig(config ?? ProcessInfo.processInfo.environment["ARTICULATE_ASR_CONFIG"] ?? defaultConfig)
         let id = locale.identifier(.bcp47) + (speech ? "#speech" : "")
         if preparedLock.withLock({ preparedLocales.contains(id) }) { return }
@@ -151,6 +153,7 @@ final class LiveTranscriber: @unchecked Sendable {
             ? SpeechTranscriber(locale: locale, preset: .transcription)
             : DictationTranscriber(locale: locale, preset: .shortDictation)
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [probe]) {
+            guard allowDownload else { throw TranscriberError.assetsNotInstalled }
             try await request.downloadAndInstall()
         }
         preparedLock.withLock { _ = preparedLocales.insert(id) }

@@ -125,6 +125,14 @@ enum Prefs {
     static let autoCodexModel = "auto"
     static let fastCodexModel = "gpt-6-luna"
     static let strongCodexModel = "gpt-6.1-sol"
+    /// One switch for short-dictation speculation and simultaneous Codex copies.
+    static var shortDictationSpeed: Bool {
+        if let value = ProcessInfo.processInfo.environment["ARTICULATE_SHORT_DICTATION_SPEED"] {
+            return value == "1"
+        }
+        return d.object(forKey: "shortDictationSpeed") as? Bool ?? true
+    }
+
     static let strongModelFromLength = 100
 
     /// Codex model for AI tasks that are not routed by length (and the `codex exec` path).

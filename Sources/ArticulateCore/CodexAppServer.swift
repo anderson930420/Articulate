@@ -365,6 +365,16 @@ actor CodexThreadPool {
         return try await CodexAppServer.shared.startThread(model: model)
     }
 
+    /// Two primed threads reserved together, or nil when fewer are ready: waiting for a second one to warm up
+    /// would cost more than the twin saves, so the caller sends a single request instead.
+    func takePair(model: String) -> [String]? {
+        defer { refill(model: model) }
+        guard readyCount(for: model) >= 2 else { return nil }
+        let threads = Array(ready[model]!.prefix(2))
+        ready[model]!.removeFirst(2)
+        return threads
+    }
+
     /// Tops up the threads of every model in use, in the background.
     func refill() {
         for model in Prefs.codexModelsInUse { refill(model: model) }
@@ -407,6 +417,9 @@ actor CodexThreadPool {
 /// Codex through the long-lived app-server and primed thread pool.
 struct CodexServerModel: LanguageModel {
     let name = "Codex"
+    /// Offline tests inject only the turn transport; routing, racing, cancellation and timing stay real.
+    typealias TurnRunner = @Sendable (String, String, @escaping @Sendable () -> Void) async throws -> String
+    var turnRunner: TurnRunner? = nil
 
     /// If no output has started after this long, the same request is also sent on a second primed thread.
     /// Measured over 60 real dictations: first token median 1.4 s, 90th percentile 2.65 s. At 1.6 s, 40% of requests
@@ -439,6 +452,77 @@ struct CodexServerModel: LanguageModel {
         try await complete("<instructions>\n\(system)\n</instructions>\n\(user)", schema: nil)
     }
 
+    func shortDictationText(system: String, user: String, onWinner: (@Sendable (String) -> Void)?) async throws -> String {
+        let message = "<instructions>\n\(system)\n</instructions>\n\(user)"
+        // AITasks wraps the raw text in two newlines. Keep existing model routing on the original message.
+        let rawLength = Self.transcriptLength(message).map { $0 - 2 }
+        guard Prefs.shortDictationSpeed, let length = rawLength,
+              (4..<Prefs.strongModelFromLength).contains(length),
+              !message.contains("<previous>\n") else {
+            return try await complete(message, schema: nil)
+        }
+        let server = CodexAppServer.shared
+        let model = Self.model(for: message)
+        let ready = turnRunner == nil ? await CodexThreadPool.shared.readyCount(for: model) : 0
+        let pair: [String]
+        if turnRunner != nil { pair = ["first", "twin"] }
+        else if let threads = await CodexThreadPool.shared.takePair(model: model) { pair = threads }
+        else { return try await complete(message, schema: nil) }
+        let timing = TurnTiming(model: model, ready: ready, deadline: Self.deadline(for: message))
+        let started = Flag()
+        return try await withThrowingTaskGroup(of: (text: String, by: String).self) { group in
+            group.addTask {
+                let threads = pair
+                defer { if turnRunner == nil { threads.forEach { server.release(thread: $0) } } }
+                let result = try await FirstTokenRace().run { copy, token in
+                    let first: @Sendable () -> Void = { started.set(); token() }
+                    if let turnRunner { return try await turnRunner(threads[copy], message, first) }
+                    return try await server.runTurn(thread: threads[copy], text: message, timeout: timing.deadline,
+                                                    onFirstToken: first, onDelta: { timing.delta() })
+                }
+                return (result.text, result.by)
+            }
+            // The same safety net as a single request: both copies can stall together (one replay of 40 waited
+            // out the whole deadline), so a third copy goes out if neither has started after the hedge delay.
+            group.addTask {
+                try await Task.sleep(for: .seconds(Self.hedgeDelay))
+                if started.isSet { try await Task.sleep(for: .seconds(60)) }
+                timing.hedged()
+                if let turnRunner { return (try await turnRunner("hedge", message, {}), "hedge") }
+                let thread = try await CodexThreadPool.shared.take(model: model)
+                defer { server.release(thread: thread) }
+                return (try await server.runTurn(thread: thread, text: message, onDelta: { timing.delta() }), "hedge")
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(timing.deadline))
+                throw CodexAppServer.ServerError.timeout
+            }
+            var lastError: Error?
+            while let result = await group.nextResult() {
+                switch result {
+                case .success(let (text, by)):
+                    group.cancelAll()
+                    onWinner?(by)
+                    DiagnosticLog.write(timing.summary("done by \(by), \(text.count) chars"))
+                    return text
+                case .failure(let error):
+                    if case CodexAppServer.ServerError.timeout = error {
+                        group.cancelAll()
+                        DiagnosticLog.write(timing.summary("gave up (raw transcript used)"))
+                        throw error
+                    }
+                    if !(error is CancellationError) { lastError = error }
+                }
+            }
+            if Task.isCancelled {
+                DiagnosticLog.write(timing.summary("cancelled"))
+                throw CancellationError()
+            }
+            DiagnosticLog.write(timing.summary("failed: \(lastError?.localizedDescription ?? "?")"))
+            throw lastError ?? CodexAppServer.ServerError.timeout
+        }
+    }
+
     func json(system: String, user: String, schema: [String: Any]) async throws -> [String: Any] {
         let text = try await complete("<instructions>\n\(system)\n</instructions>\n\(user)", schema: schema)
         guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
@@ -452,9 +536,12 @@ struct CodexServerModel: LanguageModel {
         let server = CodexAppServer.shared
         let started = Flag()
         let model = Self.model(for: message)
-        let timing = TurnTiming(model: model, ready: await CodexThreadPool.shared.readyCount(for: model), deadline: Self.deadline(for: message))
+        let timing = TurnTiming(model: model, ready: turnRunner == nil ? await CodexThreadPool.shared.readyCount(for: model) : 0, deadline: Self.deadline(for: message))
         return try await withThrowingTaskGroup(of: (text: String, by: String).self) { group in
             group.addTask {
+                if let turnRunner {
+                    return (try await turnRunner("first", message, { started.set() }), "first")
+                }
                 let thread = try await CodexThreadPool.shared.take(model: model)
                 defer { server.release(thread: thread) }
                 let text = try await server.runTurn(thread: thread, text: message, schema: schema,
@@ -465,6 +552,7 @@ struct CodexServerModel: LanguageModel {
                 try await Task.sleep(for: .seconds(Self.hedgeDelay))
                 if started.isSet { try await Task.sleep(for: .seconds(60)) }
                 timing.hedged()
+                if let turnRunner { return (try await turnRunner("hedge", message, {}), "hedge") }
                 let thread = try await CodexThreadPool.shared.take(model: model)
                 defer { server.release(thread: thread) }
                 NSLog("Articulate: Codex slow to start, hedging on a second thread")

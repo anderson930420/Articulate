@@ -123,12 +123,24 @@ struct SpeechChunker {
     static let frame = 480  // 30 ms at 16 kHz
     private var energies: [Float] = []
     private var threshold: Float = 0.004
+    var silenceThreshold: Float { threshold }
     private var start = 0  // first frame of the current piece
     private var silentRun = 0
+    /// Early passes start at a shorter pause than real cuts: the user's median silence before release is 0.46 s.
+    static let earlyPauseFrames = 8
+    /// Only this much continuous sound counts as more speech after an early cut; a key click is shorter.
+    static let speechFrames = 4
+    private var voicedRun = 0
+    private var voicedSincePause = false
+    /// End of the last stretch of continuous sound (absolute sample index).
+    private(set) var lastSpeechEnd = 0
+    private(set) var pieceStart = 0
+    private(set) var pauses: [Range<Int>] = []
 
     /// Feeds all samples recorded so far; returns the pieces that just ended.
     mutating func update(_ samples: [Float]) -> [Range<Int>] {
         var ended: [Range<Int>] = []
+        pauses.removeAll(keepingCapacity: true)
         while (energies.count + 1) * Self.frame <= samples.count {
             let f = energies.count
             var sum: Float = 0
@@ -139,13 +151,23 @@ struct SpeechChunker {
                 threshold = max(sorted[sorted.count / 10] * 2.5, 0.004)
             }
             silentRun = energies[f] < threshold ? silentRun + 1 : 0
+            voicedRun = energies[f] < threshold ? 0 : voicedRun + 1
+            if voicedRun >= Self.speechFrames {
+                voicedSincePause = true
+                lastSpeechEnd = (f + 1) * Self.frame
+            }
             let length = Double((f - start) * Self.frame) / 16000
             if (silentRun >= 13 && length >= 6) || length >= 25 {
                 let cut = f - silentRun / 2
                 ended.append((start * Self.frame)..<(cut * Self.frame))
                 start = cut
                 silentRun = 0
+                voicedSincePause = false
+            } else if silentRun == Self.earlyPauseFrames, voicedSincePause {
+                pauses.append((start * Self.frame)..<((f - silentRun / 2) * Self.frame))
+                voicedSincePause = false
             }
+            pieceStart = start * Self.frame
         }
         return ended
     }
@@ -169,6 +191,47 @@ final class CompanionRecognizer: @unchecked Sendable {
     /// Requests run one after another; each adds its piece's text, or nil when it failed.
     private var chain = Task<[String?], Never> { [] }
     private var progress: (@MainActor @Sendable (String) -> Void)?
+    typealias Inference = @Sendable ([Float], String) async -> String?
+    private let inference: Inference
+    private var earlyEnabled: Bool
+    private var ended = false
+    private struct Early {
+        let range: Range<Int>
+        let context: String
+        let previous: Task<[String?], Never>
+    }
+    private var pendingEarly: Early?
+    private var earlyWorker: Task<Void, Never>?
+    private var earlyResult: (range: Range<Int>, context: String, texts: [String?])?
+    private var runningEarly: Early?
+    private var earlyPasses = 0
+    private var earlyNote = ""
+    /// Why the last finish did or did not use a pause pass, and how many passes ran (diagnostics, no text).
+    var earlyDiagnostics: String { lock.withLock { "\(earlyPasses) pause passes, \(earlyNote.isEmpty ? "-" : earlyNote)" } }
+    private var reusedEarly = false
+    var usedEarly: Bool { lock.withLock { reusedEarly } }
+
+    init(shortDictation: Bool = false, inference: Inference? = nil) {
+        earlyEnabled = shortDictation && Prefs.shortDictationSpeed
+        self.inference = inference ?? { samples, prompt in
+            guard await CompanionServer.shared.ensureRunning() else { return nil }
+            return try? await CompanionServer.transcribe(samples, prompt: prompt)
+        }
+    }
+
+    /// Length and mode stops are sticky: a later recognizer revision must not restart speculation.
+    func stopEarlyPasses() {
+        let worker = lock.withLock {
+            earlyEnabled = false
+            pendingEarly = nil
+            earlyResult = nil
+            return earlyWorker
+        }
+        worker?.cancel()
+    }
+
+    /// A finished pause pass is waiting to be used (tests wait for this).
+    var hasPausePass: Bool { lock.withLock { earlyResult != nil } }
 
     /// Called on the main thread with all text recognized so far, each time a piece is done
     /// (not after a piece failed: the text would no longer match the audio).
@@ -184,17 +247,131 @@ final class CompanionRecognizer: @unchecked Sendable {
     /// Called from the audio tap with microphone buffers.
     func append(_ buffer: AVAudioPCMBuffer) {
         guard let converted = convert(buffer) else { return }
-        let ended: [Range<Int>] = lock.withLock {
+        lock.withLock {
             samples.append(contentsOf: converted)
-            return chunker.update(samples)
+            for range in chunker.update(samples) { enqueue(range) }
+            if earlyEnabled, !ended, let range = chunker.pauses.last, range.lowerBound == chunker.pieceStart {
+                // Keep ranges rather than sample copies for queued passes. Real pieces always take priority.
+                pendingEarly = Early(range: range, context: context, previous: chain)
+                if earlyWorker == nil {
+                    earlyWorker = Task { [weak self] in await self?.workEarly() }
+                }
+            }
         }
-        for range in ended { enqueue(range) }
+    }
+
+    private func workEarly() async {
+        while !Task.isCancelled {
+            guard let candidate = lock.withLock({ pendingEarly }) else { break }
+            // Wait outside the real-piece chain; speculative work can never hold up the next real piece.
+            let texts = await candidate.previous.value
+            let work: (Early, [Float])? = lock.withLock {
+                guard earlyEnabled, !ended, let latest = pendingEarly,
+                      latest.range == candidate.range else { return nil }
+                pendingEarly = nil
+                guard latest.range.lowerBound == chunker.pieceStart else { return nil }
+                runningEarly = latest
+                earlyPasses += 1
+                return (latest, Array(samples[latest.range]))
+            }
+            guard let (request, samples) = work else { continue }
+            let prompt = Self.prompt(context: request.context, texts: texts)
+            let text = await inference(samples, prompt)
+            // A pass still running at release is kept: finish may wait for it instead of the remainder.
+            lock.withLock {
+                runningEarly = nil
+                guard earlyEnabled, !Task.isCancelled, let text,
+                      !texts.contains(where: { $0 == nil }),
+                      request.range.lowerBound == chunker.pieceStart,
+                      chunker.lastSpeechEnd <= request.range.upperBound,
+                      request.context == context else { return }
+                earlyResult = (request.range, request.context, texts + [text])
+            }
+        }
+        lock.withLock {
+            earlyWorker = nil
+            if earlyEnabled, !ended, pendingEarly != nil {
+                earlyWorker = Task { [weak self] in await self?.workEarly() }
+            }
+        }
+    }
+
+    private static func prompt(context: String, texts: [String?]) -> String {
+        (texts.last ?? nil).map { context + "\n" + String($0.suffix(120)) } ?? context
+    }
+
+    /// Apple decides eligibility before a pause result can replace the final TEA request. The final request still
+    /// starts right away, so a dictation that turns out long keeps today's timing; a short one drops its result.
+    func finish(timeout: Double, finalTranscript: Task<String, Error>) async -> String? {
+        let started = Date()
+        let (ready, worker): ([String?]?, Task<Void, Never>?) = lock.withLock {
+            if let texts = validEarly() { return (texts, nil) }
+            guard let running = runningEarly, covers(running.range), running.context == context else {
+                earlyNote = earlyPasses == 0 ? "no pause pass" : (earlyResult == nil ? "no usable pass" : "speech after pause")
+                return (nil, nil)
+            }
+            return (nil, earlyWorker)
+        }
+        guard ready != nil || worker != nil else { return await finish(timeout: timeout) }
+        let fallback = Task { await self.finish(timeout: timeout) }
+        let raw = try? await finalTranscript.value
+        guard let raw, (4..<Prefs.strongModelFromLength).contains(raw.count) else {
+            lock.withLock { earlyNote = "long or empty" }
+            return await fallback.value
+        }
+        var texts = ready
+        if texts == nil, let worker {
+            // The remainder queues behind this pass on the TEA server anyway, so waiting for it is never slower.
+            let remaining = max(0, timeout - Date().timeIntervalSince(started))
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await worker.value }
+                group.addTask { try? await Task.sleep(for: .seconds(remaining)) }
+                await group.next()
+                group.cancelAll()
+            }
+            texts = lock.withLock { validEarly() }
+        }
+        guard let texts else {
+            lock.withLock { earlyNote = "pass failed" }
+            return await fallback.value
+        }
+        lock.withLock {
+            reusedEarly = true
+            earlyNote = ready == nil ? "waited for pause pass" : "pause pass ready"
+        }
+        return texts.compactMap { $0 }.joined()
+    }
+
+    /// The range still covers the current piece and nothing was said after its cut. Must be called with `lock` held.
+    private func covers(_ range: Range<Int>) -> Bool {
+        guard earlyEnabled, range.lowerBound == chunker.pieceStart,
+              chunker.lastSpeechEnd <= range.upperBound else { return false }
+        // The chunker only measures whole frames; the last partial frame must be quiet too.
+        let tail = samples[(samples.count / SpeechChunker.frame * SpeechChunker.frame)..<samples.count]
+        let energy = tail.isEmpty ? 0 : (tail.reduce(0) { $0 + $1 * $1 } / Float(tail.count)).squareRoot()
+        return energy < chunker.silenceThreshold
+    }
+
+    /// The early pass's texts when it still covers the current piece. Must be called with `lock` held.
+    private func validEarly() -> [String?]? {
+        guard let result = earlyResult, result.context == context, covers(result.range) else { return nil }
+        return result.texts
     }
 
     /// The whole recording's text once every piece is recognized; nil if a piece failed or took longer than `timeout`.
-    func finish(timeout: Double) async -> String? {
-        let rest: Range<Int>? = lock.withLock { chunker.remainder(total: samples.count) }
-        if let rest { enqueue(rest) }
+    func finish(timeout: Double, allowEarly: Bool = false) async -> String? {
+        let ready: [String?]? = lock.withLock {
+            let early = allowEarly ? validEarly() : nil
+            ended = true
+            pendingEarly = nil
+            if let early {
+                reusedEarly = true
+                return early
+            }
+            if let rest = chunker.remainder(total: samples.count) { enqueue(rest) }
+            return nil
+        }
+        if let ready { return ready.compactMap { $0 }.joined() }
         let chain = lock.withLock { self.chain }
         enum Outcome { case done([String?]), timedOut }
         let outcome = await withTaskGroup(of: Outcome.self) { group in
@@ -211,23 +388,28 @@ final class CompanionRecognizer: @unchecked Sendable {
         return texts.compactMap { $0 }.joined()
     }
 
+    /// Must be called with `lock` held.
     private func enqueue(_ range: Range<Int>) {
-        lock.withLock {
-            let piece = Array(samples[range])
-            let context = context
-            let previous = chain
-            let progress = progress
-            chain = Task {
-                var texts = await previous.value
-                guard await CompanionServer.shared.ensureRunning() else { return texts + [nil] }
-                let prompt = (texts.last ?? nil).map { context + "\n" + String($0.suffix(120)) } ?? context
-                texts.append(try? await CompanionServer.transcribe(piece, prompt: prompt))
-                if let progress, !texts.contains(where: { $0 == nil }) {
-                    let soFar = texts.compactMap { $0 }.joined()
-                    Task { @MainActor in progress(soFar) }
-                }
-                return texts
+        // A new real piece invalidates pause passes; the final remainder at release must not stop one in flight.
+        if !ended {
+            earlyWorker?.cancel()
+            pendingEarly = nil
+            earlyResult = nil
+        }
+        let piece = Array(samples[range])
+        let context = context
+        let previous = chain
+        let progress = progress
+        let inference = inference
+        chain = Task {
+            var texts = await previous.value
+            let prompt = Self.prompt(context: context, texts: texts)
+            texts.append(await inference(piece, prompt))
+            if let progress, !texts.contains(where: { $0 == nil }) {
+                let soFar = texts.compactMap { $0 }.joined()
+                Task { @MainActor in progress(soFar) }
             }
+            return texts
         }
     }
 
